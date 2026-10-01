@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>104 職缺爬蟲</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>104 職缺爬蟲</h1>
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab" role="tab" data-view="search">搜尋</button>
+    <button type="button" class="tab" role="tab" data-view="watches">追蹤清單</button>
+    <button type="button" class="tab" role="tab" data-view="favorites">最愛 (0)</button>
+  </nav>
+  <button type="button" class="btn small ghost hidden-btn" id="hiddenBtn">已隱藏 (0)</button>
+</header>
+
+<dialog id="hiddenDialog" class="panel">
+  <div class="dialog-head">
+    <h2>已隱藏的職缺</h2>
+    <button type="button" class="btn small ghost" id="hiddenClose">關閉</button>
+  </div>
+  <p class="hint">這些職缺在一般搜尋和所有追蹤都不會顯示，也不會算進新增。</p>
+  <div id="hiddenList"></div>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+<div class="server-gone" id="serverGone" hidden>程式已結束。要繼續使用，請重新執行 start_ui.bat。</div>
+
+<!-- ===== 搜尋 ===== -->
+<main class="layout view" id="view-search">
+  <form id="form" class="panel settings" autocomplete="off">
+
+    <div class="edit-banner" id="editBanner" hidden>
+      <strong id="editTitle">編輯追蹤</strong>
+      <label class="edit-name">名稱
+        <input type="text" id="editNameInput" class="text" maxlength="60" placeholder="追蹤名稱">
+      </label>
+      <button type="button" id="cancelEditBtn" class="btn small ghost">取消</button>
+    </div>
+
+    <section>
+      <h2><span class="num">1</span>關鍵字搜尋<small>可多個，分別搜尋後合併</small></h2>
+      <div class="tag-input" id="keywordInput">
+        <input type="text" id="keywordText" placeholder="輸入後按 Enter 或逗號，例如：數據分析">
+      </div>
+      <div class="row">
+        <span class="label">排序</span>
+        <div class="pills" data-name="order" data-type="radio"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">2</span>地區<small>可複選</small></h2>
+      <div class="picker" id="areaPicker"></div>
+    </section>
+
+    <section>
+      <h2><span class="num">3</span>工作要求</h2>
+      <div class="field">
+        <span class="label">工作性質</span>
+        <div class="pills" data-name="ro" data-type="radio"></div>
+      </div>
+      <div class="field">
+        <span class="label">更新時間</span>
+        <div class="pills" data-name="isnew" data-type="radio" data-any="不限" data-custom="自訂"></div>
+        <div class="row" id="newDaysRow" hidden>
+          <label class="inline">最近
+            <input type="number" id="newDays" class="text num-input" min="1" max="365" value="5"> 天內更新（含今天）
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <span class="label">經驗<small>可複選</small></span>
+        <div class="pills" data-name="jobexp" data-type="checkbox"></div>
+      </div>
+      <div class="field">
+        <span class="label">出勤規則</span>
+        <div class="sublabel">上班時段<small>可複選</small></div>
+        <div class="pills" data-name="s9" data-type="checkbox"></div>
+        <div class="sublabel">輪班</div>
+        <div class="pills" data-name="s5" data-type="radio" data-any="不限"></div>
+        <div class="sublabel">其他</div>
+        <div class="pills">
+          <label class="pill"><input type="checkbox" id="wktm"><span>週休二日</span></label>
+          <label class="pill"><input type="checkbox" id="oneClass"><span>一頭班</span></label>
+        </div>
+      </div>
+      <div class="field">
+        <span class="label">學歷要求</span>
+        <div class="pills" data-name="edu" data-type="radio" data-any="不限"></div>
+        <p class="hint">「大學以上」＝職缺最低學歷要求為大學或更高，會排除「學歷不拘」的職缺。</p>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">4</span>公司相關</h2>
+      <div class="field">
+        <span class="label">公司產業<small>可複選</small></span>
+        <div class="picker" id="industPicker"></div>
+      </div>
+      <div class="field">
+        <span class="label">公司類型<small>可複選</small></span>
+        <div class="pills" data-name="zone" data-type="checkbox"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">⚙</span>執行設定</h2>
+      <div class="row wrap">
+        <label class="inline">每個關鍵字最多爬
+          <input type="number" id="maxPage" class="text num-input" min="1" max="150" value="5"> 頁
+        </label>
+        <label class="pill"><input type="checkbox" id="fetchDetail" checked><span>抓取詳細資料</span></label>
+      </div>
+      <p class="hint" id="estimate"></p>
+    </section>
+
+    <div class="actions">
+      <button type="button" id="resetBtn" class="btn ghost">清除條件</button>
+      <button type="button" id="saveWatchBtn" class="btn">存成追蹤</button>
+      <button type="submit" id="startBtn" class="btn primary">開始搜尋</button>
+    </div>
+  </form>
+
+  <div class="results">
+    <div class="panel status" id="searchStatus"></div>
+    <div class="panel table-panel" id="searchResults"></div>
+  </div>
+</main>
+
+<!-- ===== 追蹤清單 ===== -->
+<main class="layout view" id="view-watches" hidden>
+  <div class="panel watch-list-panel">
+    <div class="panel-head">
+      <h2>追蹤</h2>
+      <button type="button" class="btn small primary" id="runAllBtn" disabled title="依清單順序執行全部追蹤">全部執行</button>
+    </div>
+    <div id="watchList" class="watch-list"></div>
+  </div>
+
+  <div class="results">
+    <div class="panel status" id="watchStatus" hidden></div>
+    <div class="panel batch-summary" id="batchSummary" hidden></div>
+    <div class="panel runs-panel" id="runsPanel">
+      <div class="panel-head"><h2 id="runsTitle">執行紀錄</h2></div>
+      <div id="runsList"></div>
+    </div>
+    <div class="panel table-panel" id="runResults" hidden></div>
+  </div>
+</main>
+
+<!-- ===== 最愛 ===== -->
+<main class="view favorites-view" id="view-favorites" hidden>
+  <div class="panel fav-toolbar" id="favToolbar"></div>
+  <div class="panel table-panel" id="favResults"></div>
+</main>
+
+<dialog id="progressDialog" class="panel">
+  <div class="dialog-head">
+    <div>
+      <h2 id="progressTitle"></h2>
+      <div class="co" id="progressCompany"></div>
+    </div>
+    <button type="button" class="btn small ghost" id="progressClose">關閉</button>
+  </div>
+  <h3 class="dialog-sub">應徵歷程</h3>
+  <ul class="event-list" id="eventList"></ul>
+  <h3 class="dialog-sub">新增一筆</h3>
+  <div class="event-add">
+    <select id="eventStage" class="text" aria-label="階段"></select>
+    <input type="date" id="eventDate" class="text" aria-label="日期">
+    <input type="text" id="eventNote" class="text" maxlength="200" placeholder="備註（選填），例如：二面：技術主管">
+    <button type="button" class="btn primary" id="eventAddBtn">新增</button>
+  </div>
+  <p class="hint" id="noStageHint" hidden>還沒有任何應徵階段，請先到「管理群組與階段」新增。</p>
+</dialog>
+
+<dialog id="manageDialog" class="panel">
+  <div class="dialog-head">
+    <h2>管理群組與階段</h2>
+    <button type="button" class="btn small ghost" id="manageClose">關閉</button>
+  </div>
+  <h3 class="dialog-sub">群組</h3>
+  <ul class="manage-list" id="manage-groups"></ul>
+  <div class="list-add">
+    <input type="text" class="text" data-kind="groups" maxlength="30" placeholder="新群組名稱，例如：第一志願">
+    <button type="button" class="btn small" data-kind="groups">新增</button>
+  </div>
+  <h3 class="dialog-sub">應徵階段</h3>
+  <ul class="manage-list" id="manage-stages"></ul>
+  <div class="list-add">
+    <input type="text" class="text" data-kind="stages" maxlength="30" placeholder="新階段名稱，例如：筆試">
+    <button type="button" class="btn small" data-kind="stages">新增</button>
+  </div>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
