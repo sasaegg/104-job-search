@@ -197,6 +197,42 @@
   </div>
 </dialog>
 
+<dialog id="externalDialog" class="panel">
+  <form id="externalForm" autocomplete="off">
+    <div class="dialog-head">
+      <h2 id="externalTitle">新增外部職缺</h2>
+    </div>
+    <p class="hint">加入 104 以外的職缺（例如 1111、CakeResume、LinkedIn、公司官網），可以一起分群組、記錄應徵進度。</p>
+    <label class="ext-field"><span>網址 <em>*</em></span>
+      <input type="url" name="url" class="text" required maxlength="1000" placeholder="https://…">
+    </label>
+    <label class="ext-field"><span>職稱 <em>*</em></span>
+      <input type="text" name="title" class="text" required maxlength="200">
+    </label>
+    <label class="ext-field"><span>公司 <em>*</em></span>
+      <input type="text" name="company" class="text" required maxlength="200">
+    </label>
+    <div class="ext-row">
+      <label class="ext-field"><span>地點</span>
+        <input type="text" name="location" class="text" maxlength="100" placeholder="例如：台北市內湖區">
+      </label>
+      <label class="ext-field"><span>待遇</span>
+        <input type="text" name="salary" class="text" maxlength="100" placeholder="例如：月薪 50,000~70,000">
+      </label>
+    </div>
+    <label class="ext-field" id="extGroupRow"><span>群組</span>
+      <select name="group" id="extGroup" class="text"></select>
+    </label>
+    <label class="ext-field"><span>備註</span>
+      <input type="text" name="note" class="text" maxlength="500" placeholder="例如：朋友內推、需附作品集">
+    </label>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="externalCancel">取消</button>
+      <button type="submit" class="btn primary" id="externalSave">加入最愛</button>
+    </div>
+  </form>
+</dialog>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

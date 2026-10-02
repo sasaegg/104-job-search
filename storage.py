@@ -398,6 +398,50 @@ class Storage:
         return self._run(lambda db: db.execute('UPDATE favorite_jobs SET group_id = ? WHERE job_no = ?',
                                                (groupId, str(jobNo))).rowcount)
 
+    # ---------- 外部職缺 (非104 手動輸入 存在最愛中 jobNo 以 ext- 開頭) ----------
+    EXTERNAL_PREFIX = 'ext-'
+    EXTERNAL_FIELDS = ('jobDetailUrl', 'jobTitles', 'jobCompanyName', 'jobLocation', 'jobSalary', 'note')
+
+    @staticmethod
+    def _sameUrl(a, b):
+        # 忽略前後空白、大小寫與結尾斜線
+        norm = lambda u: (u or '').strip().rstrip('/').lower()
+        return norm(a) == norm(b)
+
+    def FindFavoriteByUrl(self, url, excludeJobNo=None):
+        for f in self.ListFavorites():
+            if f['jobNo'] != excludeJobNo and self._sameUrl(f.get('jobDetailUrl'), url):
+                return f
+        return None
+
+    def AddExternalFavorite(self, fields, groupId=None):
+        # fields: 網址/職稱/公司/地點/待遇/備註 回傳新的 jobNo
+        import uuid
+        jobNo = self.EXTERNAL_PREFIX + uuid.uuid4().hex[:12]
+        data = {k: str(fields.get(k) or '').strip() for k in self.EXTERNAL_FIELDS}
+        data.update(jobNo=jobNo, source='external', jobAnnounceDate=datetime.date.today().strftime('%Y%m%d'))
+
+        def Write(db):
+            db.execute('INSERT INTO favorite_jobs (job_no, data, favorited_at, group_id) VALUES (?, ?, ?, ?)',
+                       (jobNo, json.dumps(data, ensure_ascii=False), Now(), groupId))
+        self._run(Write)
+        return jobNo
+
+    def UpdateExternalFavorite(self, jobNo, fields):
+        # 只能修改外部職缺 (104職缺的資料由爬蟲自動更新) 回傳是否成功
+        def Write(db):
+            found = db.execute('SELECT data FROM favorite_jobs WHERE job_no = ?', (str(jobNo),)).fetchone()
+            if found is None:
+                return False
+            data = json.loads(found['data'])
+            if data.get('source') != 'external':
+                return False
+            data.update({k: str(fields.get(k) or '').strip() for k in self.EXTERNAL_FIELDS})
+            db.execute('UPDATE favorite_jobs SET data = ? WHERE job_no = ?',
+                       (json.dumps(data, ensure_ascii=False), str(jobNo)))
+            return True
+        return self._run(Write)
+
     # ---------- 應徵歷程 ----------
     def AddEvent(self, jobNo, stageId, date, note=''):
         # 記下當時的階段名稱 階段被刪除後歷程仍顯示原名

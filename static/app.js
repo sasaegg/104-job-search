@@ -280,23 +280,37 @@ function fmtDate(d) {
   return /^\d{8}$/.test(d) ? `${d.slice(4, 6)}/${d.slice(6)}` : d;
 }
 
+function hostOf(url) {
+  try { return new URL(url).hostname; } catch { return ''; }
+}
+
 function rowHtml(r, { favCols = false } = {}) {
-  const badge = r.isNew ? '<span class="badge-new">新</span>' : '';
-  const kw = r.matchedKeywords ? `<div class="co">🔍 ${esc(r.matchedKeywords)}</div>` : '';
+  const ext = r.source === 'external';
+  const badge = (r.isNew ? '<span class="badge-new">新</span>' : '') + (ext ? '<span class="badge-ext">外部</span>' : '');
+  const kw = (r.matchedKeywords ? `<div class="co">🔍 ${esc(r.matchedKeywords)}</div>` : '')
+    + (r.note ? `<div class="co">📝 ${esc(r.note)}</div>` : '');
   const fav = favoriteJobs.has(r.jobNo);
+  // 外部職缺: 沒有公司頁連結 公司下方改顯示網站網域
+  const company = ext
+    ? `${esc(r.jobCompanyName)}<div class="co">${esc(hostOf(r.jobDetailUrl))}</div>`
+    : `<a href="${esc(r.jobCompanyUrl)}" target="_blank" rel="noopener">${esc(r.jobCompanyName)}</a><div class="co">${esc(r.jobCompanyIndustry)}</div>`;
+  // 外部職缺: 隱藏對它沒有意義 改為編輯
+  const lastCell = ext
+    ? `<button type="button" class="hide-btn ext-edit-btn" data-job="${esc(r.jobNo)}" title="編輯外部職缺" aria-label="編輯">✎</button>`
+    : `<button type="button" class="hide-btn" data-job="${esc(r.jobNo)}" title="隱藏此職缺，之後不再顯示" aria-label="隱藏">✕</button>`;
   return `<tr class="${r.isNew ? 'is-new' : ''}">
     <td class="act"><button type="button" class="fav-btn ${fav ? 'on' : ''}" data-job="${esc(r.jobNo)}"
       aria-pressed="${fav}" title="${fav ? '取消最愛' : '加入最愛'}" aria-label="${fav ? '取消最愛' : '加入最愛'}">${fav ? '★' : '☆'}</button></td>
     <td>${esc(fmtDate(r.jobAnnounceDate))}</td>
     <td>${badge}<a href="${esc(r.jobDetailUrl)}" target="_blank" rel="noopener">${esc(r.jobTitles)}</a>${kw}</td>
-    <td><a href="${esc(r.jobCompanyUrl)}" target="_blank" rel="noopener">${esc(r.jobCompanyName)}</a><div class="co">${esc(r.jobCompanyIndustry)}</div></td>
+    <td>${company}</td>
     <td>${esc(r.jobLocation)}</td>
     <td>${esc(r.jobSalary)}</td>
     <td>${esc(r.jobRqYear)}</td>
     <td>${esc(r.jobRqEducation)}</td>
     ${favCols ? `<td>${groupSelectHtml(r)}</td><td>${stageButtonHtml(r)}</td>
     <td class="nowrap">${esc(fmtTime(r.favoritedAt))}</td>` : ''}
-    <td class="act"><button type="button" class="hide-btn" data-job="${esc(r.jobNo)}" title="隱藏此職缺，之後不再顯示" aria-label="隱藏">✕</button></td>
+    <td class="act">${lastCell}</td>
   </tr>`;
 }
 
@@ -497,6 +511,7 @@ function renderFavToolbar() {
           ${appStages.map(s => `<option value="${s.id}" ${favFilter.stage === s.id ? 'selected' : ''}>${esc(s.name)} (${count(f => f.current?.stageId === s.id)})</option>`).join('')}
         </select>
       </label>
+      <button type="button" class="btn small primary" id="addExternalBtn">＋ 新增外部職缺</button>
       <button type="button" class="btn small" id="manageBtn">管理群組與階段</button>
     </div>`;
 }
@@ -511,6 +526,8 @@ function initFavToolbar() {
       refreshFavorites();
     } else if (e.target.closest('#manageBtn')) {
       openManage();
+    } else if (e.target.closest('#addExternalBtn')) {
+      openExternalForm(null);
     }
   });
   el.addEventListener('change', e => {
@@ -519,6 +536,64 @@ function initFavToolbar() {
     favFilter.stage = v === 'all' || v === 'none' ? v : Number(v);
     refreshFavorites();
   });
+}
+
+// ---------- 外部職缺 (非104 手動輸入) ----------
+let externalEditing = null; // null=新增 / 職缺資料=編輯
+
+function openExternalForm(row) {
+  externalEditing = row;
+  const f = $('#externalForm');
+  f.reset();
+  $('#externalTitle').textContent = row ? '編輯外部職缺' : '新增外部職缺';
+  $('#externalSave').textContent = row ? '儲存' : '加入最愛';
+  // 群組只在新增時設定 (之後用表格上的群組選單切換)
+  $('#extGroupRow').hidden = !!row;
+  $('#extGroup').innerHTML = `<option value="">未分組</option>` +
+    favGroups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('');
+  if (row) {
+    f.url.value = row.jobDetailUrl || '';
+    f.title.value = row.jobTitles || '';
+    f.company.value = row.jobCompanyName || '';
+    f.location.value = row.jobLocation || '';
+    f.salary.value = row.jobSalary || '';
+    f.note.value = row.note || '';
+  } else if (typeof favFilter.group === 'number') {
+    $('#extGroup').value = favFilter.group; // 正在看某個群組時 預設加入該群組
+  }
+  $('#externalDialog').showModal();
+  f.url.focus();
+}
+
+async function saveExternal(e) {
+  e.preventDefault();
+  const f = $('#externalForm');
+  const body = {
+    url: f.url.value.trim(), title: f.title.value.trim(), company: f.company.value.trim(),
+    location: f.location.value.trim(), salary: f.salary.value.trim(), note: f.note.value.trim(),
+  };
+  if (!externalEditing) body.groupId = f.group.value ? Number(f.group.value) : null;
+  try {
+    if (externalEditing) {
+      await api(`/api/favorites/external/${encodeURIComponent(externalEditing.jobNo)}`, { method: 'PUT', body: JSON.stringify(body) });
+    } else {
+      await api('/api/favorites/external', { method: 'POST', body: JSON.stringify(body) });
+    }
+  } catch (err) { alert(err.message); return; }
+  const wasEditing = !!externalEditing;
+  $('#externalDialog').close();
+  await loadLists();
+  await loadFavorites();
+  if (!wasEditing) showToastPlain(`已加入外部職缺「${body.title}」`);
+}
+
+// 沒有「復原」按鈕的提示
+function showToastPlain(text) {
+  const el = $('#toast');
+  el.innerHTML = `<span>${esc(text)}</span>`;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 4000);
 }
 
 // ---------- 應徵進度視窗 ----------
@@ -574,6 +649,8 @@ async function addEvent() {
 
 function initProgress() {
   initFavToolbar();
+  $('#externalForm').addEventListener('submit', saveExternal);
+  $('#externalCancel').addEventListener('click', () => $('#externalDialog').close());
   $('#progressClose').addEventListener('click', () => $('#progressDialog').close());
   $('#eventAddBtn').addEventListener('click', addEvent);
   $('#eventNote').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addEvent(); } });
@@ -726,7 +803,8 @@ class ResultsTable {
             <th class="sortable" data-sort="company" title="點擊排序">公司<span class="sort-arrow"></span></th>
             <th>地點</th><th>待遇</th><th>經歷</th><th>學歷</th>
             ${favCols ? '<th>群組</th><th>應徵進度</th><th>收藏時間</th>' : ''}
-            <th class="act" title="隱藏後不再顯示">隱藏</th>
+            ${favCols ? '<th class="act" title="104職缺：隱藏／外部職缺：編輯">隱藏／編輯</th>'
+              : '<th class="act" title="隱藏後不再顯示">隱藏</th>'}
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -745,6 +823,7 @@ class ResultsTable {
       if (!row) return;
       if (btn.classList.contains('fav-btn')) toggleFavorite(row);
       else if (btn.classList.contains('stage-btn')) openProgress(row.jobNo);
+      else if (btn.classList.contains('ext-edit-btn')) openExternalForm(row);
       else hideJob(row);
     });
     this.tbody.addEventListener('change', e => {

@@ -1,6 +1,7 @@
 # 104人力銀行爬蟲 網頁介面
 # 執行後會自動開啟瀏覽器 http://127.0.0.1:5104
 import io
+import re
 import os
 import sys
 import uuid
@@ -276,6 +277,9 @@ def HideJob():
     jobNo = str(body.get('jobNo') or '').strip()
     if not jobNo:
         return jsonify({'error': '缺少職缺編號'}), 400
+    if jobNo.startswith(storage.EXTERNAL_PREFIX):
+        # 隱藏是讓爬蟲略過104職缺 外部職缺請直接取消最愛
+        return jsonify({'error': '外部職缺不能隱藏，請直接取消最愛'}), 400
     # 若原本在最愛 回傳被移出的內容 供前端復原
     removed = storage.HideJob(jobNo, body.get('title', ''), body.get('company', ''), body.get('url', ''))
     return jsonify({'ok': True, 'removedFavorite': removed})
@@ -359,7 +363,8 @@ def FavoritesCsvRows():
         history = '；'.join(e['date'][5:].replace('-', '/') + ' ' + e['stageName'] +
                            ('（' + e['note'] + '）' if e['note'] else '') for e in r['events'])
         rows.append({**r, 'group': groups.get(r['groupId'], ''), 'stage': current['stageName'] if current else '未投遞',
-                     'stageDate': current['date'] if current else '', 'history': history})
+                     'stageDate': current['date'] if current else '', 'history': history,
+                     'source': '外部' if r.get('source') == 'external' else '104', 'note': r.get('note', '')})
     return rows
 
 
@@ -367,8 +372,60 @@ def FavoritesCsvRows():
 def DownloadFavoritesCsv():
     rows = FavoritesCsvRows()
     keywords = sorted({k for r in rows for k in (r.get('matchedKeywords') or '').split(', ') if k})
-    dataFrame = ToDataFrame(rows, keywords, '', extraColumns=['group', 'stage', 'stageDate', 'history', 'favoritedAt'])
+    dataFrame = ToDataFrame(rows, keywords, '', extraColumns=['source', 'note', 'group', 'stage', 'stageDate',
+                                                               'history', 'favoritedAt'])
     return SendCsv(dataFrame, CsvFileName(['最愛'], '收藏清單'))
+
+
+# ---------- 外部職缺 ----------
+def ExternalFieldsFromBody():
+    # 回傳 (fields, error)
+    body = request.get_json(force=True) or {}
+    fields = {
+        'jobDetailUrl': str(body.get('url') or '').strip(),
+        'jobTitles': str(body.get('title') or '').strip(),
+        'jobCompanyName': str(body.get('company') or '').strip(),
+        'jobLocation': str(body.get('location') or '').strip(),
+        'jobSalary': str(body.get('salary') or '').strip(),
+        'note': str(body.get('note') or '').strip(),
+    }
+    if not re.match(r'^https?://[^\s/]+\.[^\s]+$', fields['jobDetailUrl'], re.I):
+        return fields, '網址格式不正確，請以 http:// 或 https:// 開頭'
+    if not fields['jobTitles']:
+        return fields, '請輸入職稱'
+    if not fields['jobCompanyName']:
+        return fields, '請輸入公司'
+    for key, limit in (('jobDetailUrl', 1000), ('jobTitles', 200), ('jobCompanyName', 200),
+                       ('jobLocation', 100), ('jobSalary', 100), ('note', 500)):
+        fields[key] = fields[key][:limit]
+    return fields, None
+
+
+@app.post('/api/favorites/external')
+def AddExternalFavorite():
+    fields, error = ExternalFieldsFromBody()
+    if error:
+        return jsonify({'error': error}), 400
+    if storage.FindFavoriteByUrl(fields['jobDetailUrl']):
+        return jsonify({'error': '這個職缺已經在最愛中'}), 409
+    groupId = (request.get_json(force=True) or {}).get('groupId')
+    if groupId is not None and not any(g['id'] == groupId for g in storage.ListItems('groups')):
+        return jsonify({'error': '找不到這個群組'}), 404
+    return jsonify({'ok': True, 'jobNo': storage.AddExternalFavorite(fields, groupId)})
+
+
+@app.put('/api/favorites/external/<jobNo>')
+def UpdateExternalFavorite(jobNo):
+    if not any(f['jobNo'] == jobNo and f.get('source') == 'external' for f in storage.ListFavorites()):
+        return jsonify({'error': '找不到這個外部職缺'}), 404
+    fields, error = ExternalFieldsFromBody()
+    if error:
+        return jsonify({'error': error}), 400
+    if storage.FindFavoriteByUrl(fields['jobDetailUrl'], excludeJobNo=jobNo):
+        return jsonify({'error': '這個網址已經是另一個最愛職缺'}), 409
+    if not storage.UpdateExternalFavorite(jobNo, fields):
+        return jsonify({'error': '找不到這個外部職缺'}), 404
+    return jsonify({'ok': True})
 
 
 # ---------- 自訂清單: 群組 (groups) / 應徵階段 (stages) ----------

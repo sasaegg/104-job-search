@@ -408,3 +408,17 @@ tr:hover .hide-btn { border-color: var(--border); }
 
 /* 學歷欄不要被擠成一字一行 */
 th:nth-child(8), td:nth-child(8) { min-width: 5.5em; }
+
+/* ===== 外部職缺 ===== */
+.badge-ext {
+  display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 4px;
+  background: var(--chip); color: var(--muted); border: 1px solid var(--border);
+  font-size: 11px; font-weight: 700; vertical-align: 1px;
+}
+#externalDialog { width: min(560px, calc(100vw - 32px)); padding: 16px 18px; color: var(--text); }
+#externalDialog::backdrop { background: rgba(0, 0, 0, .35); }
+.ext-field { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; flex: 1; min-width: 0; }
+.ext-field > span { font-weight: 600; font-size: 13px; }
+.ext-field em { color: var(--danger); font-style: normal; }
+.ext-row { display: flex; gap: 10px; }
+@media (max-width: 520px) { .ext-row { flex-direction: column; gap: 0; } }
