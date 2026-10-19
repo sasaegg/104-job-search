@@ -422,3 +422,6 @@ th:nth-child(8), td:nth-child(8) { min-width: 5.5em; }
 .ext-field em { color: var(--danger); font-style: normal; }
 .ext-row { display: flex; gap: 10px; }
 @media (max-width: 520px) { .ext-row { flex-direction: column; gap: 0; } }
+.concurrency-setting { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+.concurrency-setting input { width: 64px; padding: 6px; }
+.concurrency-setting .hint { flex-basis: 100%; margin: 0; }

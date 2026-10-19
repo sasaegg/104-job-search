@@ -205,7 +205,7 @@ class TagInput {
 }
 
 // ---------- 進度面板 ----------
-const STATUS_TEXT = { pending: '準備中…', running: '搜尋中…', done: '完成', stopped: '已停止', error: '發生錯誤' };
+const STATUS_TEXT = { pending: '排隊中…', running: '搜尋中…', done: '完成', stopped: '已停止', error: '發生錯誤' };
 
 class StatusPanel {
   constructor(el, { showNew = false } = {}) {
@@ -900,7 +900,6 @@ let busy = false;
 function setBusy(value) {
   busy = value;
   $('#startBtn').disabled = value;
-  $$('.watch-run').forEach(b => { b.disabled = value; });
   updateRunAllButton();
 }
 
@@ -1184,8 +1183,11 @@ function renderWatches() {
     return;
   }
   el.innerHTML = watches.map(w => {
+    const active = watchJobs.get(w.id);
     const last = w.lastRun;
-    const lastText = last
+    const lastText = active
+      ? `${active.state ? STATUS_TEXT[active.state.status] : '排隊中…'}・共 ${active.state?.count ?? 0} 筆・新增 ${active.state?.newCount ?? 0} 筆`
+      : last
       ? `${fmtTime(last.startedAt)}・${RUN_STATUS[last.status]}・共 ${last.totalCount} 筆`
       : '尚未執行';
     const badge = last && last.newCount ? `<span class="new-count">+${last.newCount}</span>` : '';
@@ -1194,7 +1196,8 @@ function renderWatches() {
       <div class="watch-summary">${esc(summarize(w.filters, w))}</div>
       <div class="watch-last">${esc(lastText)}</div>
       <div class="watch-actions">
-        <button type="button" class="btn small primary watch-run" ${busy ? 'disabled' : ''}>執行</button>
+        <button type="button" class="btn small primary watch-run" ${watchJobs.has(w.id) ? 'disabled' : ''}>${watchJobs.has(w.id) ? '執行／排隊中' : '執行'}</button>
+        ${active ? '<button type="button" class="btn small danger watch-stop">停止</button>' : ''}
         <button type="button" class="btn small watch-edit">編輯條件</button>
         <button type="button" class="btn small watch-copy">複製</button>
         <button type="button" class="btn small ghost danger-text watch-delete">刪除</button>
@@ -1208,6 +1211,7 @@ async function loadWatches(selectId) {
   if (selectId !== undefined) selectedWatchId = selectId;
   if (!watches.some(w => w.id === selectedWatchId)) selectedWatchId = watches[0]?.id ?? null;
   renderWatches();
+  showWatchProgress();
   await loadRuns();
 }
 
@@ -1220,6 +1224,7 @@ async function loadRuns(selectRunId) {
     return;
   }
   const runs = await api(`/api/watches/${watch.id}/runs`);
+  if (selectedWatchId !== watch.id) return;
   if (selectRunId !== undefined) selectedRunId = selectRunId;
   if (!runs.some(r => r.id === selectedRunId)) selectedRunId = runs[0]?.id ?? null;
   $('#runsList').innerHTML = runs.length ? `
@@ -1245,6 +1250,7 @@ async function loadRun(runId) {
   selectedRunId = runId;
   $$('#runsList tr[data-run]').forEach(tr => tr.classList.toggle('selected', Number(tr.dataset.run) === runId));
   const run = await api(`/api/runs/${runId}`);
+  if (selectedRunId !== runId) return;
   $('#runResults').hidden = false;
   const first = run.isFirstRun ? '<span class="first-run">首次執行，全部視為新增</span>' : '';
   runTable.setTitle(`<strong>${esc(fmtTime(run.startedAt))} 的結果</strong>　共 ${run.totalCount} 筆，新增 ${run.newCount} 筆 ${first}
@@ -1253,95 +1259,102 @@ async function loadRun(runId) {
   runTable.setCsv(run.totalCount ? `/api/runs/${runId}/csv` : null);
 }
 
-function runWatch(watch) {
-  selectedWatchId = watch.id;
-  renderWatches();
-  $('#watchStatus').hidden = false;
-  $('#runResults').hidden = false;
-  runTable.setTitle(`<strong>執行中：${esc(watch.name)}</strong>`);
-  runTable.setRows([]);
-  runTable.setCsv(null);
-  runTableLive = true;
-  $('#batchSummary').hidden = true;
-  runJob(`/api/watches/${watch.id}/run`, null, watchPanel, {
-    onRows: rows => { if (runTableLive) runTable.appendRows(rows); },
-    onDone: async s => {
-      watchPanel.setCsv(s.runId && s.count ? `/api/runs/${s.runId}/csv` : null);
-      await loadWatches(watch.id);
-      if (s.runId) await loadRuns(s.runId);
-    },
-  });
-}
-
-// ---------- 全部執行 ----------
-const BATCH_STATUS = { ...RUN_STATUS, pending: '未執行', deleted: '已刪除' };
+// 每個追蹤獨立輪詢，只有選取的執行紀錄會更新右側結果。
+const watchJobs = new Map();
+let batchJobs = [];
+let startingWatches = false;
 
 function updateRunAllButton() {
   const btn = $('#runAllBtn');
-  if (btn) btn.disabled = busy || !watches.length;
+  if (btn) btn.disabled = startingWatches || !watches.length || watches.every(w => watchJobs.has(w.id));
 }
 
-// 只更新卡片 (不重新載入右側結果 以免打斷即時顯示)
 async function refreshWatchCards() {
   watches = await api('/api/watches').catch(() => watches);
   renderWatches();
 }
 
-function renderBatchSummary(s) {
-  const b = s.batch;
-  const newTotal = b.results.reduce((n, r) => n + r.newCount, 0);
-  const statusText = s.status === 'stopped' ? '（已停止）' : '';
-  $('#batchSummary').innerHTML = `
-    <div class="panel-head">
-      <h2>全部執行結果${statusText}</h2>
-      <button type="button" class="btn small ghost" id="batchClose">關閉</button>
-    </div>
-    <p class="batch-total">${b.total} 個追蹤，共新增 <strong>${newTotal}</strong> 筆</p>
-    <table class="runs-table batch-table">
-      <thead><tr><th>追蹤</th><th>狀態</th><th>總筆數</th><th>新增</th></tr></thead>
-      <tbody>${b.results.map(r => `
-        <tr ${r.runId ? `data-watch="${r.watchId}" data-run="${r.runId}"` : ''} class="${r.runId ? '' : 'no-run'}"
-          title="${esc(r.message || '')}">
-          <td>${esc(r.name)}</td>
-          <td class="st-${r.status}">${BATCH_STATUS[r.status] || r.status}</td>
-          <td>${r.runId ? r.totalCount : '–'}</td>
-          <td>${r.newCount ? `<span class="new-count">+${r.newCount}</span>` : (r.runId ? '0' : '–')}</td>
-        </tr>`).join('')}</tbody>
-    </table>
-    <p class="hint">點一列可查看該追蹤這次的結果。</p>`;
-  $('#batchSummary').hidden = false;
+function showWatchProgress() {
+  const entry = watchJobs.get(selectedWatchId);
+  $('#watchStatus').hidden = !entry;
+  if (!entry) return;
+  watchPanel.onStop = () => api(`/api/jobs/${entry.id}/stop`, { method: 'POST' });
+  watchPanel.reset();
+  if (entry.state) watchPanel.update(entry.state);
 }
 
-function runAllWatches() {
-  if (!watches.length) return;
-  $('#watchStatus').hidden = false;
-  $('#runResults').hidden = false;
-  $('#batchSummary').hidden = true;
-  runTable.setRows([]);
-  runTable.setCsv(null);
-  runTable.setTitle('<strong>全部執行：準備中…</strong>');
-  runTableLive = true;
-  runJob('/api/watches/run-all', null, watchPanel, {
-    // 換到下一個追蹤: 表格改顯示新的追蹤 卡片更新上一個的結果
-    onRunChange: async s => {
-      if (!s.batch || !s.runId) return;
-      selectedWatchId = s.watchId;
-      await refreshWatchCards();
-      if (runTableLive) {
-        runTable.setRows([]);
-        runTable.setTitle(`<strong>全部執行 ${s.batch.index + 1}/${s.batch.total}：${esc(s.batch.name)}</strong>`);
+function renderParallelSummary() {
+  const entries = batchJobs.map(j => ({ ...j, entry: watchJobs.get(j.watchId), state: j.state }));
+  $('#batchSummary').hidden = !entries.length;
+  $('#batchSummary').innerHTML = `<div class="panel-head"><h2>全部執行</h2>
+    <button class="btn small danger" id="stopBatch" ${entries.some(j => j.entry) ? '' : 'disabled'}>停止整批</button></div>
+    <table class="runs-table"><thead><tr><th>追蹤</th><th>狀態</th><th>筆數</th><th>新增</th></tr></thead><tbody>
+    ${entries.map(j => `<tr data-watch="${j.watchId}" ${j.state?.runId ? `data-run="${j.state.runId}"` : ''}>
+      <td>${esc(watches.find(w => w.id === j.watchId)?.name || '')}</td>
+      <td>${esc(j.state ? STATUS_TEXT[j.state.status] : '排隊中')}</td><td>${j.state?.count ?? 0}</td><td>${j.state?.newCount ?? 0}</td></tr>`).join('')}</tbody></table>`;
+}
+
+function followWatch(job) {
+  if (watchJobs.has(job.watchId)) return;
+  const entry = { id: job.id, state: null };
+  watchJobs.set(job.watchId, entry);
+  renderWatches();
+  const poll = async () => {
+    try {
+      const state = await api(`/api/jobs/${job.id}`);
+      entry.state = state;
+      renderWatches();
+      const batch = batchJobs.find(j => j.id === job.id);
+      if (batch) { batch.state = state; renderParallelSummary(); }
+      if (selectedWatchId === job.watchId) {
+        showWatchProgress();
+        if (runTableLive || selectedRunId === state.runId) {
+          selectedRunId = state.runId;
+          runTableLive = false;
+          $('#runResults').hidden = false;
+          runTable.setTitle(`<strong>${esc(watches.find(w => w.id === job.watchId)?.name || '')}</strong>`);
+          runTable.setRows(state.rows);
+          runTable.setCsv(state.count ? `/api/runs/${state.runId}/csv` : null);
+        }
       }
-    },
-    onRows: rows => { if (runTableLive) runTable.appendRows(rows); },
-    onDone: async s => {
-      watchPanel.setCsv(null);
-      renderBatchSummary(s);
-      // 選有新增的第一個追蹤 沒有的話維持目前選擇
-      const firstNew = s.batch.results.find(r => r.newCount > 0 && r.runId);
-      await loadWatches(firstNew ? firstNew.watchId : selectedWatchId);
-      if (firstNew) await loadRuns(firstNew.runId);
-    },
-  });
+      if (['pending', 'running'].includes(state.status)) {
+        setTimeout(poll, 1500);
+      } else {
+        watchJobs.delete(job.watchId);
+        if (batch) renderParallelSummary();
+        await refreshWatchCards();
+        if (selectedWatchId === job.watchId) {
+          showWatchProgress();
+          if (selectedRunId === state.runId) await loadRuns(state.runId);
+        }
+        loadFavorites();
+      }
+    } catch (err) { setTimeout(poll, 3000); }
+  };
+  poll();
+}
+
+async function runWatch(watch) {
+  if (watchJobs.has(watch.id)) return;
+  selectedWatchId = watch.id;
+  selectedRunId = null;
+  runTableLive = true;
+  try {
+    const job = await api(`/api/watches/${watch.id}/run`, { method: 'POST' });
+    followWatch({ ...job, watchId: watch.id });
+  } catch (err) { alert(err.message); }
+}
+
+async function runAllWatches() {
+  startingWatches = true;
+  updateRunAllButton();
+  try {
+    const response = await api('/api/watches/run-all', { method: 'POST' });
+    batchJobs = response.jobs;
+    batchJobs.forEach(followWatch);
+    renderParallelSummary();
+  } catch (err) { alert(err.message); }
+  finally { startingWatches = false; updateRunAllButton(); }
 }
 
 function initWatches() {
@@ -1349,12 +1362,33 @@ function initWatches() {
   runTable = new ResultsTable($('#runResults'), { emptyText: '沒有結果', newToggle: true });
 
   $('#runAllBtn').addEventListener('click', runAllWatches);
+  api('/api/execution').then(async data => {
+    $('#concurrency').value = data.concurrency;
+    for (const job of data.jobs) {
+      const state = await api(`/api/jobs/${job.id}`);
+      if (['pending', 'running'].includes(state.status)) followWatch(job);
+    }
+  }).catch(err => alert(err.message));
+  $('#concurrency').addEventListener('change', async e => {
+    try {
+      const data = await api('/api/execution', { method: 'PUT', body: JSON.stringify({ concurrency: Number(e.target.value) }) });
+      e.target.value = data.concurrency;
+    } catch (err) {
+      alert(err.message);
+      e.target.value = (await api('/api/execution')).concurrency;
+    }
+  });
   $('#batchSummary').addEventListener('click', async e => {
+    if (e.target.closest('#stopBatch')) {
+      await Promise.all(batchJobs.filter(j => watchJobs.has(j.watchId)).map(j => api(`/api/jobs/${j.id}/stop`, { method: 'POST' })));
+      return;
+    }
     if (e.target.closest('#batchClose')) { $('#batchSummary').hidden = true; return; }
     const tr = e.target.closest('tr[data-run]');
     if (!tr) return;
     selectedWatchId = Number(tr.dataset.watch);
     renderWatches();
+    showWatchProgress();
     await loadRuns(Number(tr.dataset.run));
     $('#runResults').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
@@ -1365,6 +1399,9 @@ function initWatches() {
     const watch = watches.find(w => w.id === Number(card.dataset.id));
     if (e.target.closest('.watch-run')) {
       runWatch(watch);
+    } else if (e.target.closest('.watch-stop')) {
+      const job = watchJobs.get(watch.id);
+      if (job) await api(`/api/jobs/${job.id}/stop`, { method: 'POST' });
     } else if (e.target.closest('.watch-edit')) {
       startEditing('edit', watch);
     } else if (e.target.closest('.watch-copy')) {
@@ -1381,6 +1418,7 @@ function initWatches() {
       selectedWatchId = watch.id;
       selectedRunId = null;
       renderWatches();
+      showWatchProgress();
       await loadRuns();
     }
   });
@@ -1422,7 +1460,7 @@ function initLifecycle() {
   window.addEventListener('pagehide', () => navigator.sendBeacon(`/api/bye?client=${encodeURIComponent(clientId)}`));
   // 爬蟲執行中關閉網頁: 先跳出瀏覽器的離開確認 (瀏覽器不允許自訂文字)
   window.addEventListener('beforeunload', e => {
-    if (busy) { e.preventDefault(); e.returnValue = true; }
+    if (busy || watchJobs.size) { e.preventDefault(); e.returnValue = true; }
   });
 }
 

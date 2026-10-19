@@ -136,8 +136,13 @@
   <div class="panel watch-list-panel">
     <div class="panel-head">
       <h2>追蹤</h2>
-      <button type="button" class="btn small primary" id="runAllBtn" disabled title="依清單順序執行全部追蹤">全部執行</button>
+      <button type="button" class="btn small primary" id="runAllBtn" disabled title="平行執行全部追蹤，已執行或排隊的追蹤會略過">全部執行</button>
     </div>
+    <label class="concurrency-setting">同時執行數
+      <input id="concurrency" type="number" min="1" max="20" step="1" value="3" aria-label="同時執行數">
+      <span class="hint">超過上限會排隊；調低時已啟動的工作會繼續完成。</span>
+      <span class="hint">提醒：不建議同時執行過多追蹤，可能觸發 104 的存取限制或封鎖。</span>
+    </label>
     <div id="watchList" class="watch-list"></div>
   </div>
 

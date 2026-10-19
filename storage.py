@@ -148,6 +148,15 @@ class Storage:
             db.close()
 
     # ---------- 追蹤 ----------
+    def GetConcurrency(self):
+        return self._run(lambda db: int((db.execute(
+            "SELECT value FROM meta WHERE key = 'concurrency'"
+        ).fetchone() or [3])[0]))
+
+    def SetConcurrency(self, value):
+        self._run(lambda db: db.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('concurrency', ?)", (str(value),)))
+
     @staticmethod
     def _watchDict(row):
         return {

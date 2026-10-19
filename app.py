@@ -25,6 +25,32 @@ storage = Storage()
 _categoryCache = {}
 _jobs = {}
 _lock = threading.Lock()
+_slots = threading.Condition()
+_active = 0
+
+
+def Concurrency():
+    return storage.GetConcurrency()
+
+
+@app.get('/api/execution')
+def ExecutionStatus():
+    with _lock:
+        jobs = [{'id': key, 'watchId': j['watchRun'].watch['id']}
+                for key, j in _jobs.items() if j.get('watchRun')
+                and j['crawler'].status in ('pending', 'running')]
+    return jsonify({'concurrency': Concurrency(), 'jobs': jobs})
+
+
+@app.put('/api/execution')
+def UpdateExecution():
+    value = request.get_json(force=True).get('concurrency')
+    if type(value) is not int or not 1 <= value <= 20:
+        return jsonify({'error': '同時執行數請輸入 1 到 20 的整數'}), 400
+    storage.SetConcurrency(value)
+    with _slots:
+        _slots.notify_all()
+    return jsonify({'concurrency': value})
 
 
 def Category(name):
@@ -55,11 +81,13 @@ def Options():
 
 
 # ---------- 爬蟲執行 (一般搜尋與追蹤共用進度輪詢) ----------
-def StartCrawl(makeCrawler):
-    # makeCrawler(log) 回傳 (crawler, target, extra) 同一時間只允許一個爬蟲
+def StartCrawl(makeCrawler, watchId=None):
+    # 所有搜尋與追蹤共用執行上限；同一追蹤包含排隊工作也不可重複。
     with _lock:
-        if any(j['crawler'].status in ('pending', 'running') for j in _jobs.values()):
-            return jsonify({'error': '已有爬蟲正在執行 請先停止或等待完成'}), 409
+        if watchId is not None and any(
+                j.get('watchRun') and j['watchRun'].watch['id'] == watchId
+                and j['crawler'].status in ('pending', 'running') for j in _jobs.values()):
+            return jsonify({'error': '此追蹤已在執行或排隊中'}), 409
         logs = deque(maxlen=200)
 
         def Log(msg):
@@ -67,7 +95,32 @@ def StartCrawl(makeCrawler):
 
         crawler, target, extra = makeCrawler(Log)
         jobId = uuid.uuid4().hex[:8]
-        thread = threading.Thread(target=target, daemon=True)
+        def Execute():
+            global _active
+            with _slots:
+                while _active >= Concurrency() and not crawler._stop:
+                    _slots.wait(timeout=0.2)
+                acquired = not crawler._stop
+                if acquired:
+                    _active += 1
+            try:
+                if acquired:
+                    target()
+                else:
+                    crawler.status = 'stopped'
+                    crawler.message = '排隊時已停止'
+                    if extra.get('watchRun'):
+                        storage.FinishRun(extra['watchRun'].runId, 'stopped', crawler.message)
+            except Exception as e:
+                crawler.status = 'error'
+                crawler.message = str(e)
+            finally:
+                with _slots:
+                    if acquired:
+                        _active -= 1
+                    _slots.notify_all()
+
+        thread = threading.Thread(target=Execute, daemon=True)
         _jobs[jobId] = {'crawler': crawler, 'logs': logs, 'thread': thread, **extra}
         thread.start()
     return jsonify({'id': jobId, **{k: v for k, v in extra.items() if k == 'runId'}})
@@ -207,7 +260,7 @@ def DeleteWatch(watchId):
     GetWatchOr404(watchId)
     def RunningWatchId(j):
         run = j['batch'].current if j.get('batch') else j.get('watchRun')
-        return run.watch['id'] if run and j['crawler'].status == 'running' else None
+        return run.watch['id'] if run and j['crawler'].status in ('pending', 'running') else None
     if any(RunningWatchId(j) == watchId for j in _jobs.values()):
         return jsonify({'error': '此追蹤正在執行 請先停止'}), 409
     storage.DeleteWatch(watchId)
@@ -221,20 +274,22 @@ def RunWatch(watchId):
     def Make(log):
         watchRun = WatchRun(storage, watch, log=log)
         return watchRun.crawler, watchRun.execute, {'watchRun': watchRun, 'runId': watchRun.runId}
-    return StartCrawl(Make)
+    return StartCrawl(Make, watchId=watchId)
 
 
 @app.post('/api/watches/run-all')
 def RunAllWatches():
-    # 依追蹤清單順序(與畫面相同) 依序執行全部追蹤
     watches = storage.ListWatches()
     if not watches:
         return jsonify({'error': '還沒有任何追蹤'}), 400
 
-    def Make(log):
-        batch = BatchRun(storage, watches, log=log)
-        return batch, batch.execute, {'batch': batch}
-    return StartCrawl(Make)
+    jobs = []
+    for watch in watches:
+        response = RunWatch(watch['id'])
+        if isinstance(response, tuple):  # 已在執行的追蹤略過
+            continue
+        jobs.append({'id': response.get_json()['id'], 'watchId': watch['id']})
+    return jsonify({'jobs': jobs})
 
 
 @app.get('/api/watches/<int:watchId>/runs')
