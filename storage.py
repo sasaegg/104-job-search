@@ -5,8 +5,14 @@ import sys
 import json
 import sqlite3
 import datetime
+from urllib.parse import urlsplit
 
 SCHEMA = '''
+CREATE TABLE IF NOT EXISTS company_capital (
+  company_id TEXT PRIMARY KEY,
+  amount INTEGER,
+  checked_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS watches (
   id           INTEGER PRIMARY KEY,
   name         TEXT NOT NULL UNIQUE,
@@ -131,6 +137,19 @@ class Storage:
         return self._run(lambda db: db.execute(
             "UPDATE runs SET status = 'error', message = '程式中斷', finished_at = ? WHERE status = 'running'",
             (Now(),)).rowcount)
+
+    def GetCompanyCapital(self, companyId):
+        def Query(db):
+            row = db.execute(
+                "SELECT amount FROM company_capital WHERE company_id = ? AND amount IS NOT NULL AND checked_at >= ?",
+                (companyId, (datetime.datetime.now() - datetime.timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S'))).fetchone()
+            return dict(row) if row is not None else None
+        return self._run(Query)
+
+    def SetCompanyCapital(self, companyId, amount):
+        self._run(lambda db: db.execute(
+            'INSERT OR REPLACE INTO company_capital (company_id, amount, checked_at) VALUES (?, ?, ?)',
+            (companyId, amount, Now())))
 
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -275,9 +294,15 @@ class Storage:
             first = db.execute('SELECT MIN(id) AS id FROM runs WHERE watch_id = ?', (run['watch_id'],)).fetchone()
             result['isFirstRun'] = first['id'] == runId
             jobs = list()
+            capitalCache = {r['company_id']: r['amount'] for r in db.execute(
+                'SELECT company_id, amount FROM company_capital WHERE amount IS NOT NULL')}
             for r in db.execute('SELECT is_new, data FROM run_jobs WHERE run_id = ? ORDER BY is_new DESC, rowid',
                                 (runId,)):
                 row = json.loads(r['data'])
+                if row.get('jobCompanyCapital') is None:
+                    companyUrl = urlsplit(row.get('jobCompanyUrl') or '')
+                    if companyUrl.hostname == 'www.104.com.tw':
+                        row['jobCompanyCapital'] = capitalCache.get(companyUrl.path.rstrip('/').split('/')[-1])
                 row['isNew'] = bool(r['is_new'])
                 jobs.append(row)
             result['rows'] = jobs

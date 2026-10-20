@@ -284,7 +284,7 @@ function hostOf(url) {
   try { return new URL(url).hostname; } catch { return ''; }
 }
 
-function rowHtml(r, { favCols = false } = {}) {
+function rowHtml(r, { favCols = false, capitalSort = false } = {}) {
   const ext = r.source === 'external';
   const badge = (r.isNew ? '<span class="badge-new">新</span>' : '') + (ext ? '<span class="badge-ext">外部</span>' : '');
   const kw = (r.matchedKeywords ? `<div class="co">🔍 ${esc(r.matchedKeywords)}</div>` : '')
@@ -303,7 +303,7 @@ function rowHtml(r, { favCols = false } = {}) {
       aria-pressed="${fav}" title="${fav ? '取消最愛' : '加入最愛'}" aria-label="${fav ? '取消最愛' : '加入最愛'}">${fav ? '★' : '☆'}</button></td>
     <td>${esc(fmtDate(r.jobAnnounceDate))}</td>
     <td>${badge}<a href="${esc(r.jobDetailUrl)}" target="_blank" rel="noopener">${esc(r.jobTitles)}</a>${kw}</td>
-    <td>${company}</td>
+    <td>${company}${capitalSort ? `<div class="co">資本額：${typeof r.jobCompanyCapital === 'number' && Number.isFinite(r.jobCompanyCapital) ? `${r.jobCompanyCapital.toLocaleString('zh-TW')} 元` : '未提供'}</div>` : ''}</td>
     <td>${esc(r.jobLocation)}</td>
     <td>${esc(r.jobSalary)}</td>
     <td>${esc(r.jobRqYear)}</td>
@@ -778,11 +778,12 @@ function initHidden(list) {
 }
 
 class ResultsTable {
-  constructor(el, { emptyText, newToggle = false, favCols = false, extraFilter = null } = {}) {
+  constructor(el, { emptyText, newToggle = false, favCols = false, extraFilter = null, capitalSort = false } = {}) {
     this.el = el;
     this.rows = [];
     this.emptyText = emptyText;
-    this.rowOptions = { favCols };
+    this.rowOptions = { favCols, capitalSort };
+    this.capitalSort = capitalSort;
     this.columns = favCols ? 12 : 9;
     this.extraFilter = extraFilter;
     el.innerHTML = `
@@ -800,7 +801,7 @@ class ResultsTable {
             <th class="act" title="加入最愛">最愛</th>
             <th class="sortable" data-sort="date" title="點擊排序">日期<span class="sort-arrow"></span></th>
             <th>職稱</th>
-            <th class="sortable" data-sort="company" title="點擊排序">公司<span class="sort-arrow"></span></th>
+            <th class="sortable" data-sort="company" title="${capitalSort ? '依資本額排序：大→小／小→大／原始順序' : '點擊排序'}">公司${capitalSort ? '（資本額）' : ''}<span class="sort-arrow"></span></th>
             <th>地點</th><th>待遇</th><th>經歷</th><th>學歷</th>
             ${favCols ? '<th>群組</th><th>應徵進度</th><th>收藏時間</th>' : ''}
             ${favCols ? '<th class="act" title="104職缺：隱藏／外部職缺：編輯">隱藏／編輯</th>'
@@ -834,9 +835,9 @@ class ResultsTable {
     this.render();
   }
 
-  // 點擊循環: 日期 新→舊→舊→新→原始 / 公司 A→Z→Z→A→原始
+  // 點擊循環: 日期新→舊、舊→新、原始；追蹤公司資本額大→小、小→大、原始
   toggleSort(key) {
-    const firstDir = key === 'date' ? -1 : 1;
+    const firstDir = key === 'date' || (key === 'company' && this.capitalSort) ? -1 : 1;
     if (!this.sort || this.sort.key !== key) this.sort = { key, dir: firstDir };
     else if (this.sort.dir === firstDir) this.sort.dir = -firstDir;
     else this.sort = null;
@@ -853,6 +854,15 @@ class ResultsTable {
     if (!this.sort) return rows;
     const { key, dir } = this.sort;
     const collator = new Intl.Collator('zh-Hant-TW');
+    if (key === 'company' && this.capitalSort) {
+      const valid = r => typeof r.jobCompanyCapital === 'number' && Number.isFinite(r.jobCompanyCapital);
+      return [...rows].sort((a, b) => {
+        if (valid(a) !== valid(b)) return valid(a) ? -1 : 1;
+        const diff = valid(a) ? dir * (a.jobCompanyCapital - b.jobCompanyCapital) : 0;
+        return diff || collator.compare(a.jobCompanyName || '', b.jobCompanyName || '')
+          || (a.jobCompanyUrl || '').localeCompare(b.jobCompanyUrl || '');
+      });
+    }
     const value = r => (key === 'date' ? r.jobAnnounceDate : r.jobCompanyName) || '';
     // 同值時保留原始順序 (Array.prototype.sort 為穩定排序)
     return [...rows].sort((a, b) => dir * (key === 'date'
@@ -1359,7 +1369,7 @@ async function runAllWatches() {
 
 function initWatches() {
   watchPanel = new StatusPanel($('#watchStatus'), { showNew: true });
-  runTable = new ResultsTable($('#runResults'), { emptyText: '沒有結果', newToggle: true });
+  runTable = new ResultsTable($('#runResults'), { emptyText: '沒有結果', newToggle: true, capitalSort: true });
 
   $('#runAllBtn').addEventListener('click', runAllWatches);
   api('/api/execution').then(async data => {

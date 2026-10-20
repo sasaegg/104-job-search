@@ -1,6 +1,7 @@
 # 執行追蹤: 串接 Crawler 與 Storage
 # 供 app.py (網頁介面) 使用
 from crawler import Crawler
+from company import FillCompanyCapital
 
 
 class WatchRun:
@@ -9,11 +10,15 @@ class WatchRun:
         self.storage = storage
         self.watch = watch
         self.newCount = 0
+        self._capitalMissing = set()
         self.runId = storage.StartRun(watch['id'])
         self.crawler = Crawler(watch['filters'], maxPage=watch['maxPage'], fetchDetail=watch['fetchDetail'],
                                log=log, onRow=self._onRow, skipJobNos=storage.HiddenJobNos())
 
     def _onRow(self, row, added):
+        if added:
+            FillCompanyCapital(row, self.storage, self.crawler.log,
+                               pause=lambda: self.crawler._sleep(1), missing=self._capitalMissing)
         self.storage.RefreshFavorite(row)
         isNew = self.storage.RecordRow(self.runId, self.watch['id'], row, added)
         if added:
